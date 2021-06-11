@@ -2,6 +2,7 @@ package src
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -62,7 +63,67 @@ func JoinChatRoom(p2phost *P2PHost, username string, roomname string) (*ChatRoom
 	}
 
 	// Start the subscription read loop
-	//go chatroom.ReadLoop()
+	go chatroom.ReadLoop()
 	// Return the chatroom
 	return chatroom, nil
+}
+
+// A method of ChatRoom that publishes a ChatMessage
+// to the PubSub topic (roomname)
+func (cr *ChatRoom) Publish(message string) error {
+	// Create a ChatMessage
+	m := ChatMessage{
+		Message:    message,
+		SenderID:   cr.SelfID.Pretty(),
+		SenderName: cr.UserName,
+	}
+
+	// Marshal the ChatMessage into a JSON
+	messagebytes, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	// Publish the message to the topic and return an error (if any)
+	return cr.pstopic.Publish(cr.ctx, messagebytes)
+}
+
+// A method of ChatRoom that continously read
+// from the subscription until it closes and
+// sends it into the message channel
+func (cr *ChatRoom) ReadLoop() {
+	// Start loop
+	for {
+		// Read a message from the subscription
+		message, err := cr.subscription.Next(cr.ctx)
+		// Check error
+		if err != nil {
+			// Close the messages queue (subscription has closed)
+			close(cr.Messages)
+			return
+		}
+
+		// Check if message is from self
+		if message.ReceivedFrom == cr.SelfID {
+			continue
+		}
+
+		// Declare a ChatMessage
+		cm := &ChatMessage{}
+		// Unmarshal the message data into a ChatMessage
+		err = json.Unmarshal(message.Data, cm)
+		if err != nil {
+			continue
+		}
+
+		// Send the ChatMessage into the message queue
+		cr.Messages <- cm
+	}
+}
+
+// A method of ChatRoom that returns a list
+// of all peer IDs connected to it
+func (cr *ChatRoom) PeerList() []peer.ID {
+	// Return the slice of peer IDs connected to chat room topic
+	return cr.psrouter.ListPeers(cr.RoomName)
 }
