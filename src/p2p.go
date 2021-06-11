@@ -37,8 +37,8 @@ type P2PHost struct {
 /*
 A constructor function that generates and returns a P2PHost for a given context object.
 
-Constructs a libp2p host with a multiaddr on 0.0.0.0/0 IPV4 address and configure it
-with NATPortMap to open a port in the firewall using UPnP. A GossipSub pubsub router
+Constructs a libp2p host with a multiaddr on the 0.0.0.0/0 IPV4 address and configure it
+with a NATPortMap to open a port in the firewall using UPnP. A GossipSub pubsub router
 is initialized for transport and a Kademlia DHT for peer discovery
 */
 func NewP2PHost(ctx context.Context) *P2PHost {
@@ -137,7 +137,7 @@ func (p2p *P2PHost) Bootstrap() {
 func (p2p *P2PHost) Provide() {
 	// Hash the service content ID with SHA256
 	hash := sha256.Sum256([]byte(serviceCID))
-	// Append the hash with the encoding format for SHA2-256 (0x12),
+	// Append the hash with the hashing codec ID for SHA2-256 (0x12),
 	// the digest size (0x20) and the hash of the service content ID
 	finalhash := append([]byte{0x12, 0x20}, hash[:]...)
 	// Encode the fullhash to Base58
