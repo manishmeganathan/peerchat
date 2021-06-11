@@ -2,12 +2,18 @@ package src
 
 import (
 	"context"
+	"crypto/sha256"
+	"sync"
 
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-host"
 	"github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-pubsub"
+	"github.com/mr-tron/base58/base58"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multihash"
 	"github.com/sirupsen/logrus"
 )
 
@@ -77,4 +83,85 @@ func NewP2PHost(ctx context.Context) *P2PHost {
 		KadDHT:       kaddht,
 		PubSubRouter: gossip,
 	}
+}
+
+// A method of P2PHost that bootstraps the Kad-DHT
+// and connects to the default bootstrap peers.
+func (p2p *P2PHost) Bootstrap() {
+	// Bootstrap the DHT
+	if err := p2p.KadDHT.Bootstrap(p2p.Ctx); err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Kademlia DHT Bootstrapping Failed!")
+	}
+	logrus.Infoln("DHT Bootstrapped Succesfully! Connecting to Bootstrap Peers...")
+
+	// Declare a WaitGroup
+	var wg sync.WaitGroup
+	// Declare counters for the number of bootstrap peers
+	var connectedbootpeers int
+	var totalbootpeers int
+
+	// Iterate over the default bootstrap peers provided by libp2p
+	for _, peeraddr := range dht.DefaultBootstrapPeers {
+		// Retrieve the peer address information
+		peerinfo, _ := peer.AddrInfoFromP2pAddr(peeraddr)
+
+		// Incremenent waitgroup counter
+		wg.Add(1)
+		// Start a goroutine to connect to each bootstrap peer
+		go func() {
+			// Defer the waitgroup decrement
+			defer wg.Done()
+			// Attempt to connect to the bootstrap peer
+			if err := p2p.Host.Connect(p2p.Ctx, *peerinfo); err != nil {
+				// Increment the total bootstrap peer count
+				totalbootpeers++
+			} else {
+				// Increment the connected bootstrap peer count
+				connectedbootpeers++
+				// Increment the total bootstrap peer count
+				totalbootpeers++
+			}
+		}()
+	}
+
+	// Wait for the waitgroup to complete
+	wg.Wait()
+	// Log the number of bootstrap peers connected
+	logrus.Infof("Connected to %d out of %d Bootstrap Peers", connectedbootpeers, totalbootpeers)
+}
+
+// A method of P2PHost that generates a service CID and
+// announces its ability to provide it to the network.
+func (p2p *P2PHost) Provide() {
+	// Hash the service content ID with SHA256
+	hash := sha256.Sum256([]byte(serviceCID))
+	// Append the hash with the encoding format for SHA2-256 (0x12),
+	// the digest size (0x20) and the hash of the service content ID
+	finalhash := append([]byte{0x12, 0x20}, hash[:]...)
+	// Encode the fullhash to Base58
+	b58string := base58.Encode(finalhash)
+
+	// Generate a Multihash from the base58 string
+	mulhash, err := multihash.FromB58String(string(b58string))
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Multihash Generation for Service Content ID Failed!")
+	}
+
+	// Generate a CID from the Multihash
+	cidvalue := cid.NewCidV1(12, mulhash)
+
+	// Announce that this host can provide the service CID
+	err = p2p.KadDHT.Provide(p2p.Ctx, cidvalue, true)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Service Content ID Announcement Failed!")
+	}
+
+	// Log the successful announcement
+	logrus.Infoln("Succesfully Announced Service Content ID!")
 }
