@@ -11,6 +11,10 @@ import (
 // Represents chat room the buffer size for incoming images
 const ChatRoomBufffer = 128
 
+// Represents the default room and user names
+const defaultuser = "newuser"
+const defaultroom = "lobby"
+
 type ChatRoom struct {
 	Messages chan *ChatMessage
 
@@ -48,6 +52,18 @@ func JoinChatRoom(p2phost *P2PHost, username string, roomname string) (*ChatRoom
 	// Check the error
 	if err != nil {
 		return nil, err
+	}
+
+	// Check the provided username
+	if username == "" {
+		// Use the default user name
+		username = defaultuser
+	}
+
+	// Check the provided roomname
+	if roomname == "" {
+		// Use the default room name
+		roomname = defaultroom
 	}
 
 	// Create a ChatRoom object
@@ -125,5 +141,5 @@ func (cr *ChatRoom) ReadLoop() {
 // of all peer IDs connected to it
 func (cr *ChatRoom) PeerList() []peer.ID {
 	// Return the slice of peer IDs connected to chat room topic
-	return cr.psrouter.ListPeers(cr.RoomName)
+	return cr.pstopic.ListPeers()
 }
