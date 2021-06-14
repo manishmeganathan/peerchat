@@ -143,3 +143,35 @@ func (cr *ChatRoom) PeerList() []peer.ID {
 	// Return the slice of peer IDs connected to chat room topic
 	return cr.pstopic.ListPeers()
 }
+
+// A method of ChatRoom that updates the chat
+// room by subscribing to the new topic
+func (cr *ChatRoom) UpdateRoom(roomname string) error {
+	// Create a PubSub topic with the room name
+	newtopic, err := cr.psrouter.Join(roomname)
+	// Check the error
+	if err != nil {
+		return err
+	}
+
+	// Subscribe to the PubSub topic
+	newsub, err := newtopic.Subscribe()
+	// Check the error
+	if err != nil {
+		return err
+	}
+
+	// Assign the new roomname
+	cr.RoomName = roomname
+	// Assign the new pubsub topic and subscription
+	cr.pstopic = newtopic
+	cr.subscription = newsub
+
+	// Return no errors
+	return nil
+}
+
+// A method of ChatRoom that updates the chat user name
+func (cr *ChatRoom) UpdateUser(username string) {
+	cr.UserName = username
+}
