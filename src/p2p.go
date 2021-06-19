@@ -3,9 +3,7 @@ package src
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 
-	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	discovery "github.com/libp2p/go-libp2p-discovery"
@@ -15,13 +13,11 @@ import (
 	tls "github.com/libp2p/go-libp2p-tls"
 	yamux "github.com/libp2p/go-libp2p-yamux"
 	"github.com/libp2p/go-tcp-transport"
-	"github.com/mr-tron/base58/base58"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/multiformats/go-multihash"
 	"github.com/sirupsen/logrus"
 )
 
-const serviceCID = "manishmeganathan/peerchat"
+const service = "manishmeganathan/peerchat"
 
 // A structure that represents a P2P Host
 type P2P struct {
@@ -58,16 +54,38 @@ func NewP2P(ctx context.Context) *P2P {
 	// Set up the host identity options
 	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
 	identity := libp2p.Identity(prvkey)
+	// Handle any potential error
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("P2P Identity Generation Failed!")
+	}
+
+	// Debug log
+	logrus.Debugln("Created Identity Configurations for the P2P Host.")
+
 	// Set up TLS secured transport options
 	tlstransport, err := tls.New(prvkey)
 	security := libp2p.Security(tls.ID, tlstransport)
+	// Handle any potential error
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("P2P Secure Transport Option Generation Failed!")
+	}
 
 	// Debug log
-	logrus.Debugln("Created Identity and Security Configurations for the P2P Host.")
+	logrus.Debugln("Created Security Configurations for the P2P Host.")
 
 	// Set up host listener address options
-	sourcemultiaddr, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
+	sourcemultiaddr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
 	listen := libp2p.ListenAddrs(sourcemultiaddr)
+	// Handle any potential error
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("P2P Listener Address Option Generation Failed!")
+	}
 
 	// Debug log
 	logrus.Debugln("Created Port Listening Address Configurations for the P2P Host.")
@@ -125,7 +143,7 @@ func NewP2P(ctx context.Context) *P2P {
 	// Debug log
 	logrus.Debugln("Created Peer Discovery Service.")
 
-	// Return the P2PHost
+	// Return the P2P object
 	return &P2P{
 		Ctx:          ctx,
 		Host:         libhost,
@@ -136,80 +154,51 @@ func NewP2P(ctx context.Context) *P2P {
 	}
 }
 
-// A method of P2PHost that generates a service CID and
-// announces its ability to provide it to the network.
-func (p2p *P2PHost) Announce() {
-	// Log the start of the announce runtime
-	logrus.Infof("Announcing Service Content ID...")
+// A method of P2P that advertises the peerchat service's
+// availabilty on this node and then discovers all peers
+// advertising the same service starts event handler to
+// connects to new peers as they are discovered
+func (p2p *P2P) Connect() {
 
-	// Hash the service content ID with SHA256
-	hash := sha256.Sum256([]byte(serviceCID))
-	// Append the hash with the hashing codec ID for SHA2-256 (0x12),
-	// the digest size (0x20) and the hash of the service content ID
-	finalhash := append([]byte{0x12, 0x20}, hash[:]...)
-	// Encode the fullhash to Base58
-	b58string := base58.Encode(finalhash)
+	// Advertise the availabilty of the service on this node
+	discovery.Advertise(p2p.Ctx, p2p.Discovery, service)
 
-	// Generate a Multihash from the base58 string
-	mulhash, err := multihash.FromB58String(string(b58string))
+	// Debug log
+	logrus.Debugln("Advertised Peerchat Service.")
+
+	// Find all peers advertising the same service
+	peerchan, err := p2p.Discovery.FindPeers(p2p.Ctx, service)
+	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
-		}).Fatalln("Multihash Generation for Service Content ID Failed!")
+		}).Fatalln("P2P Peer Discovery Failed!")
 	}
 
-	// Generate a CID from the Multihash
-	cidvalue := cid.NewCidV1(12, mulhash)
+	// Debug log
+	logrus.Debugln("Discovered Peerchat Service Peers.")
 
-	// Announce that this host can provide the service CID
-	err = p2p.KadDHT.Provide(p2p.Ctx, cidvalue, true)
-	if err != nil {
-		logrus.WithFields(logrus.Fields{
-			"error": err.Error(),
-		}).Fatalln("Service Content ID Announcement Failed!")
-	}
+	// Connect to all peers being discovered by the peer discovery service
+	go func() {
+		// Iterate over the peer channel
+		for peer := range peerchan {
+			// Ignore if the discovered peer is the host itself
+			if peer.ID == p2p.Host.ID() {
+				continue
+			}
 
-	// Assign the CID value
-	p2p.CIDValue = cidvalue
-	// Log the successful announcement
-	logrus.Infoln("Success! Service Content ID Announced!")
-}
-
-// A method of P2PHost that connects to peers that
-// provide the same service CID in the network
-func (p2p *P2PHost) Connect() {
-	// Log the start of the connect runtime
-	logrus.Infof("Discovering Other Service Content ID Providers...")
-
-	// Find the other providers for the service CID
-	peers, err := p2p.KadDHT.FindProviders(p2p.Ctx, p2p.CIDValue)
-	// Log any potential error
-	if err != nil {
-		logrus.WithFields(logrus.Fields{
-			"error": err.Error(),
-		}).Fatalln("Provider Discovery Failed!")
-	}
-
-	// Log the discovered peer count
-	logrus.Infof("Discovered %d Peers", len(peers))
-	// Declare a peer counter
-	var peercount int
-
-	// Iterate over the discovered peers
-	for _, peer := range peers {
-		// Ignore if the discovered peer
-		if peer.ID == p2p.Host.ID() {
-			continue
+			// Connect to the peer
+			if err := p2p.Host.Connect(p2p.Ctx, peer); err != nil {
+				// Handle any potential error
+				logrus.WithFields(logrus.Fields{
+					"error": err.Error(),
+				}).Fatalln("P2P Peer Connection Failed!")
+			}
 		}
-		// Connect to the peer
-		if err := p2p.Host.Connect(p2p.Ctx, peer); err == nil {
-			// Increment peer count
-			peercount++
-		}
-	}
+	}()
 
-	// Log the succesful connection
-	logrus.Infof("Connected to %d Peers", peercount)
+	// Debug log
+	logrus.Debugln("Started Peer Connection Handler.")
 }
 
 // // Create a new PubSub service which uses a GossipSub router
