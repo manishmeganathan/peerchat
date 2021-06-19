@@ -2,7 +2,6 @@ package src
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -17,8 +16,10 @@ const AppVer = "v0.1.0"
 type UI struct {
 	*ChatRoom
 	TerminalApp *tview.Application
-	PeerBox     *tview.TextView
-	MessageBox  io.Writer
+
+	PeerBox    *tview.TextView
+	MessageBox *tview.TextView
+	InputBox   *tview.InputField
 
 	InputChan chan string
 	LogChan   chan uilog
@@ -75,7 +76,7 @@ func NewUI(cr *ChatRoom) *UI {
 	// Create a usage instruction box
 	usage := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(`[red]/quit[green] - quit the chat | [red]/room <roomname>[green] - change chat room | [red]/user <username>[green] - change user name | [red]/sync[green] - refresh`)
+		SetText(`[red]/quit[green] - quit the chat | [red]/room <roomname>[green] - change chat room | [red]/user <username>[green] - change user name | [red]/clear[green] - clear the chat`)
 
 	usage.
 		SetBorder(true).
@@ -136,6 +137,11 @@ func NewUI(cr *ChatRoom) *UI {
 
 			// Send the command
 			cmdchan <- uicommand{cmdtype: cmdparts[0], cmdarg: cmdparts[1]}
+
+			// Reset the input field
+			input.SetText("")
+			// Commands are ignored in the message box
+			return
 		}
 
 		// Send the message to the input channel
@@ -163,6 +169,7 @@ func NewUI(cr *ChatRoom) *UI {
 		TerminalApp: app,
 		PeerBox:     peerbox,
 		MessageBox:  messagebox,
+		InputBox:    input,
 		LogChan:     logchan,
 		InputChan:   inputchan,
 		CmdChan:     cmdchan,
@@ -203,7 +210,7 @@ func (ui *UI) starteventhandler() {
 
 		case cmd := <-ui.CmdChan:
 			// Handle the recieved command
-			ui.handlecommand(cmd)
+			go ui.handlecommand(cmd)
 
 		case log := <-ui.LogChan:
 			// Add the log to the message box
@@ -240,8 +247,10 @@ func (ui *UI) handlecommand(cmd uicommand) {
 		ui.TerminalApp.Stop()
 		return
 
-	// Check for the sync command
-	case "/sync":
+	// Check for the clear command
+	case "/clear":
+		// Clear the UI message box
+		ui.MessageBox.Clear()
 		// Refresh the UI
 		ui.TerminalApp.Draw()
 
@@ -252,6 +261,10 @@ func (ui *UI) handlecommand(cmd uicommand) {
 		} else {
 			// Update the chat room name
 			ui.ChatRoom.UpdateRoom(cmd.cmdarg)
+			// Update the chat room UI element
+			ui.MessageBox.SetTitle(fmt.Sprintf("ChatRoom-%s", ui.ChatRoom.RoomName))
+			// Refresh the UI
+			ui.TerminalApp.Draw()
 		}
 
 	// Check for the user change command
@@ -261,6 +274,10 @@ func (ui *UI) handlecommand(cmd uicommand) {
 		} else {
 			// Update the chat user name
 			ui.ChatRoom.UpdateUser(cmd.cmdarg)
+			// Update the chat room UI element
+			ui.InputBox.SetLabel(ui.ChatRoom.UserName + " > ")
+			// Refresh the UI
+			ui.TerminalApp.Draw()
 		}
 
 	// Unsupported command
