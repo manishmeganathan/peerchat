@@ -3,6 +3,8 @@ package src
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -19,6 +21,7 @@ type ChatRoom struct {
 	Messages chan *ChatMessage
 
 	ctx          context.Context
+	psmutex      *sync.Mutex
 	psrouter     *pubsub.PubSub
 	pstopic      *pubsub.Topic
 	subscription *pubsub.Subscription
@@ -69,6 +72,7 @@ func JoinChatRoom(p2phost *P2PHost, username string, roomname string) (*ChatRoom
 	// Create a ChatRoom object
 	chatroom := &ChatRoom{
 		ctx:          p2phost.Ctx,
+		psmutex:      &sync.Mutex{},
 		psrouter:     ps,
 		pstopic:      topic,
 		subscription: sub,
@@ -110,6 +114,9 @@ func (cr *ChatRoom) Publish(message string) error {
 func (cr *ChatRoom) ReadLoop() {
 	// Start loop
 	for {
+		// Lock the pubsub mutex
+		cr.psmutex.Lock()
+
 		// Read a message from the subscription
 		message, err := cr.subscription.Next(cr.ctx)
 		// Check error
@@ -118,6 +125,10 @@ func (cr *ChatRoom) ReadLoop() {
 			close(cr.Messages)
 			return
 		}
+
+		// Unlock the pubsub mutex
+		cr.psmutex.Unlock()
+		time.Sleep(time.Millisecond)
 
 		// Check if message is from self
 		if message.ReceivedFrom == cr.SelfID {
@@ -147,6 +158,12 @@ func (cr *ChatRoom) PeerList() []peer.ID {
 // A method of ChatRoom that updates the chat
 // room by subscribing to the new topic
 func (cr *ChatRoom) UpdateRoom(roomname string) error {
+	// Lock the pubsub mutex
+	cr.psmutex.Lock()
+
+	// Cancel the existing subscription
+	cr.subscription.Cancel()
+
 	// Create a PubSub topic with the room name
 	newtopic, err := cr.psrouter.Join(roomname)
 	// Check the error
@@ -154,12 +171,15 @@ func (cr *ChatRoom) UpdateRoom(roomname string) error {
 		return err
 	}
 
-	// Subscribe to the PubSub topic
+	// Subscribe to the new PubSub topic
 	newsub, err := newtopic.Subscribe()
 	// Check the error
 	if err != nil {
 		return err
 	}
+
+	// Unlock the pubsub mutex
+	cr.psmutex.Unlock()
 
 	// Assign the new roomname
 	cr.RoomName = roomname
