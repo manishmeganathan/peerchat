@@ -22,7 +22,6 @@ W E L C O M E  T O
 888888P' '88888P' '88888P' db       '88888P' db    db '8888888   '88P   
 88                                                                    
 dP     
-
 `
 
 func init() {
@@ -35,27 +34,41 @@ func init() {
 
 	// Log to stdout
 	logrus.SetOutput(os.Stdout)
-
-	// Log Info logs and above
-	logrus.SetLevel(logrus.InfoLevel)
 }
 
 func main() {
 	// Define input flags
 	username := flag.String("user", "", "username to use in the chatroom.")
 	chatroom := flag.String("room", "", "chatroom to join.")
+	loglevel := flag.String("log", "", "level of logs to print.")
 	// Parse input flags
 	flag.Parse()
+
+	// Set the log level
+	switch *loglevel {
+	case "panic", "PANIC":
+		logrus.SetLevel(logrus.PanicLevel)
+	case "fatal", "FATAL":
+		logrus.SetLevel(logrus.FatalLevel)
+	case "error", "ERROR":
+		logrus.SetLevel(logrus.ErrorLevel)
+	case "warn", "WARN":
+		logrus.SetLevel(logrus.WarnLevel)
+	case "info", "INFO":
+		logrus.SetLevel(logrus.InfoLevel)
+	case "debug", "DEBUG":
+		logrus.SetLevel(logrus.DebugLevel)
+	case "trace", "TRACE":
+		logrus.SetLevel(logrus.TraceLevel)
+	default:
+		logrus.SetLevel(logrus.InfoLevel)
+	}
 
 	// Set background context
 	ctx := context.Background()
 
 	// Create a new P2PHost
-	p2phost := src.NewP2PHost(ctx)
-	// Bootstrap the DHT
-	p2phost.Bootstrap()
-	// Announce Service CID
-	p2phost.Announce()
+	p2phost := src.NewP2P(ctx)
 	// Connect to fellow Service CID providers
 	p2phost.Connect()
 
