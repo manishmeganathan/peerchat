@@ -2,15 +2,19 @@ package src
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"sync"
 
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p-core/crypto"
+	discovery "github.com/libp2p/go-libp2p-discovery"
 	host "github.com/libp2p/go-libp2p-host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	tls "github.com/libp2p/go-libp2p-tls"
+	yamux "github.com/libp2p/go-libp2p-yamux"
+	"github.com/libp2p/go-tcp-transport"
 	"github.com/mr-tron/base58/base58"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
@@ -19,8 +23,8 @@ import (
 
 const serviceCID = "manishmeganathan/peerchat"
 
-// A structure that represents P2P Host
-type P2PHost struct {
+// A structure that represents a P2P Host
+type P2P struct {
 	// Represents the host context layer
 	Ctx context.Context
 
@@ -30,29 +34,54 @@ type P2PHost struct {
 	// Represents the DHT routing table
 	KadDHT *dht.IpfsDHT
 
-	// Represents the PubSub router
-	PubSubRouter *pubsub.PubSub
+	// Represents the peer discovery service
+	Discovery *discovery.RoutingDiscovery
 
-	CIDValue cid.Cid
+	// Represents the Gossip router
+	GossipRouter *pubsub.GossipSubRouter
+
+	// Represents the PubSub Handler
+	PubSub *pubsub.PubSub
 }
 
 /*
-A constructor function that generates and returns a P2PHost for a given context object.
+A constructor function that generates and returns a P2P object for a given context object.
 
-Constructs a libp2p host with a multiaddr on the 0.0.0.0/0 IPV4 address and configure it
-with a NATPortMap to open a port in the firewall using UPnP. A GossipSub pubsub router
-is initialized for transport and a Kademlia DHT for peer discovery
+Constructs a libp2p host with TLS encrypted secure transportation that works over a TCP
+transport connection using a Yamux Stream Multiplexer and uses UPnP for the NAT traversal.
+
+A Kademlia DHT is then bootstrapped on this host using the default peers offered by libp2p.
+A Peer Discovery service is created from this Kademlia DHT
 */
-func NewP2PHost(ctx context.Context) *P2PHost {
-	// Create a new multiaddr object
-	sourcemultiaddr, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
+func NewP2P(ctx context.Context) *P2P {
 
-	// Construct a new LibP2P host with the multiaddr and the NAT Port Map
-	libhost, err := libp2p.New(
-		ctx,
-		libp2p.ListenAddrs(sourcemultiaddr),
-		libp2p.NATPortMap(),
-	)
+	// Set up the host identity options
+	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
+	identity := libp2p.Identity(prvkey)
+	// Set up TLS secured transport options
+	tlstransport, err := tls.New(prvkey)
+	security := libp2p.Security(tls.ID, tlstransport)
+
+	// Debug log
+	logrus.Debugln("Created Identity and Security Configurations for the P2P Host.")
+
+	// Set up host listener address options
+	sourcemultiaddr, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
+	listen := libp2p.ListenAddrs(sourcemultiaddr)
+
+	// Debug log
+	logrus.Debugln("Created Port Listening Address Configurations for the P2P Host.")
+
+	// Set up the transport, stream mux and NAT options
+	transport := libp2p.Transport(tcp.NewTCPTransport)
+	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
+	nat := libp2p.NATPortMap()
+
+	// Debug log
+	logrus.Debugln("Created Transport, Stream Multiplexer and NAT Configurations for the P2P Host.")
+
+	// Construct a new LibP2P host with the options
+	libhost, err := libp2p.New(ctx, listen, security, transport, muxer, identity, nat)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -60,17 +89,16 @@ func NewP2PHost(ctx context.Context) *P2PHost {
 		}).Fatalln("P2P Host Creation Failed!")
 	}
 
-	// Create a new PubSub service which uses a GossipSub router
-	gossip, err := pubsub.NewGossipSub(ctx, libhost)
-	// Handle any potential error
-	if err != nil {
-		logrus.WithFields(logrus.Fields{
-			"error": err.Error(),
-		}).Fatalln("GossipSub Router Creation Failed!")
-	}
+	// Create DHT server mode option
+	dhtmode := dht.Mode(dht.ModeServer)
+	// Create the DHT bootstrap peers option
+	dhtpeers := dht.BootstrapPeers(dht.GetDefaultBootstrapPeerAddrInfos()...)
 
-	// Bind the LibP2P host to a Kademlia DHT peer
-	kaddht, err := dht.New(ctx, libhost, dht.Mode(dht.ModeServer))
+	// Debug log
+	logrus.Debugln("Created DHT Configuration Options.")
+
+	// Start a Kademlia DHT on the host in server mode
+	kaddht, err := dht.New(ctx, libhost, dhtmode, dhtpeers)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -78,67 +106,34 @@ func NewP2PHost(ctx context.Context) *P2PHost {
 		}).Fatalln("Kademlia DHT Creation Failed!")
 	}
 
-	// Return the P2PHost
-	return &P2PHost{
-		Ctx:          ctx,
-		Host:         libhost,
-		KadDHT:       kaddht,
-		PubSubRouter: gossip,
-	}
-}
-
-// A method of P2PHost that bootstraps the Kad-DHT
-// and connects to the default bootstrap peers.
-func (p2p *P2PHost) Bootstrap() {
-	// Log the start of the bootstrap runtime
-	logrus.Infoln("Bootstrapping Kademlia DHT Node...")
+	// Debug log
+	logrus.Debugln("Created Kademlia DHT on Host.")
 
 	// Bootstrap the DHT
-	if err := p2p.KadDHT.Bootstrap(p2p.Ctx); err != nil {
+	if err := kaddht.Bootstrap(ctx); err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
 		}).Fatalln("Kademlia DHT Bootstrapping Failed!")
 	}
 
-	// Log the success of the bootstrap runtime
-	logrus.Infoln("Success! DHT Bootstrapped")
-	// Log the start of the bootstrap connect runtime
-	logrus.Infoln("Connecting to Bootstrap Peers...")
+	// Debug log
+	logrus.Debugln("Bootstrapped Kademlia DHT.")
 
-	// Declare a WaitGroup
-	var wg sync.WaitGroup
-	// Declare counters for the number of bootstrap peers
-	var connectedbootpeers int
-	var totalbootpeers int
+	// Create a peer discovery service using the Kad DHT
+	routingdiscovery := discovery.NewRoutingDiscovery(kaddht)
 
-	// Iterate over the default bootstrap peers provided by libp2p
-	for _, peeraddr := range dht.DefaultBootstrapPeers {
-		// Retrieve the peer address information
-		peerinfo, _ := peer.AddrInfoFromP2pAddr(peeraddr)
+	// Debug log
+	logrus.Debugln("Created Peer Discovery Service.")
 
-		// Incremenent waitgroup counter
-		wg.Add(1)
-		// Start a goroutine to connect to each bootstrap peer
-		go func() {
-			// Defer the waitgroup decrement
-			defer wg.Done()
-			// Attempt to connect to the bootstrap peer
-			if err := p2p.Host.Connect(p2p.Ctx, *peerinfo); err != nil {
-				// Increment the total bootstrap peer count
-				totalbootpeers++
-			} else {
-				// Increment the connected bootstrap peer count
-				connectedbootpeers++
-				// Increment the total bootstrap peer count
-				totalbootpeers++
-			}
-		}()
+	// Return the P2PHost
+	return &P2P{
+		Ctx:          ctx,
+		Host:         libhost,
+		KadDHT:       kaddht,
+		Discovery:    routingdiscovery,
+		PubSub:       nil,
+		GossipRouter: nil,
 	}
-
-	// Wait for the waitgroup to complete
-	wg.Wait()
-	// Log the number of bootstrap peers connected
-	logrus.Infof("Success! Connected to %d out of %d Bootstrap Peers", connectedbootpeers, totalbootpeers)
 }
 
 // A method of P2PHost that generates a service CID and
@@ -216,3 +211,12 @@ func (p2p *P2PHost) Connect() {
 	// Log the succesful connection
 	logrus.Infof("Connected to %d Peers", peercount)
 }
+
+// // Create a new PubSub service which uses a GossipSub router
+// gossip, err := pubsub.NewGossipSub(ctx, libhost)
+// // Handle any potential error
+// if err != nil {
+// 	logrus.WithFields(logrus.Fields{
+// 		"error": err.Error(),
+// 	}).Fatalln("GossipSub Router Creation Failed!")
+// }
