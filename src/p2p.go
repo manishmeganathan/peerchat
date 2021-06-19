@@ -33,9 +33,6 @@ type P2P struct {
 	// Represents the peer discovery service
 	Discovery *discovery.RoutingDiscovery
 
-	// Represents the Gossip router
-	GossipRouter *pubsub.GossipSubRouter
-
 	// Represents the PubSub Handler
 	PubSub *pubsub.PubSub
 }
@@ -47,7 +44,8 @@ Constructs a libp2p host with TLS encrypted secure transportation that works ove
 transport connection using a Yamux Stream Multiplexer and uses UPnP for the NAT traversal.
 
 A Kademlia DHT is then bootstrapped on this host using the default peers offered by libp2p.
-A Peer Discovery service is created from this Kademlia DHT
+A Peer Discovery service is created from this Kademlia DHT. The PubSub handler is then
+created on the host using the peer discovery service created prior.
 */
 func NewP2P(ctx context.Context) *P2P {
 
@@ -143,14 +141,25 @@ func NewP2P(ctx context.Context) *P2P {
 	// Debug log
 	logrus.Debugln("Created Peer Discovery Service.")
 
+	// Create a new PubSub service which uses a GossipSub router
+	gossipsub, err := pubsub.NewGossipSub(ctx, libhost, pubsub.WithDiscovery(routingdiscovery))
+	// Handle any potential error
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("GossipSub Handler Creation Failed!")
+	}
+
+	// Debug log
+	logrus.Debugln("Created GossipSub Handler.")
+
 	// Return the P2P object
 	return &P2P{
-		Ctx:          ctx,
-		Host:         libhost,
-		KadDHT:       kaddht,
-		Discovery:    routingdiscovery,
-		PubSub:       nil,
-		GossipRouter: nil,
+		Ctx:       ctx,
+		Host:      libhost,
+		KadDHT:    kaddht,
+		Discovery: routingdiscovery,
+		PubSub:    gossipsub,
 	}
 }
 
@@ -200,12 +209,3 @@ func (p2p *P2P) Connect() {
 	// Debug log
 	logrus.Debugln("Started Peer Connection Handler.")
 }
-
-// // Create a new PubSub service which uses a GossipSub router
-// gossip, err := pubsub.NewGossipSub(ctx, libhost)
-// // Handle any potential error
-// if err != nil {
-// 	logrus.WithFields(logrus.Fields{
-// 		"error": err.Error(),
-// 	}).Fatalln("GossipSub Router Creation Failed!")
-// }
