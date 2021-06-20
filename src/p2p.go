@@ -75,8 +75,8 @@ func NewP2P() *P2P {
 	// Info log
 	logrus.Infoln("Created the Peer Discovery Service.")
 
-	// Create a PubSub handler
-	pubsubhandler := setupPubSub(ctx, nodehost)
+	// Create a PubSub handler with the routing discovery
+	pubsubhandler := setupPubSub(ctx, nodehost, routingdiscovery)
 	// Debug log
 	logrus.Infoln("Created the PubSub Handler.")
 
@@ -253,9 +253,10 @@ func setupKadDHT(ctx context.Context, nodehost host.Host) *dht.IpfsDHT {
 }
 
 // A function that generates a PubSub Handler object and returns it
-func setupPubSub(ctx context.Context, nodehost host.Host) *pubsub.PubSub {
+// Requires a node host and a routing discovery service.
+func setupPubSub(ctx context.Context, nodehost host.Host, routingdiscovery *discovery.RoutingDiscovery) *pubsub.PubSub {
 	// Create a new PubSub service which uses a GossipSub router
-	pubsubhandler, err := pubsub.NewGossipSub(ctx, nodehost) //, pubsub.WithDiscovery(routingdiscovery))
+	pubsubhandler, err := pubsub.NewGossipSub(ctx, nodehost, pubsub.WithDiscovery(routingdiscovery))
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -315,7 +316,7 @@ func bootstrapDHT(ctx context.Context, nodehost host.Host, kaddht *dht.IpfsDHT) 
 	wg.Wait()
 
 	// Log the number of bootstrap peers connected
-	logrus.Debugln("Connected to %d out of %d Bootstrap Peers.", connectedbootpeers, totalbootpeers)
+	logrus.Debugf("Connected to %d out of %d Bootstrap Peers.", connectedbootpeers, totalbootpeers)
 }
 
 // A function that connects the given host to all peers recieved from a
