@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -64,13 +63,10 @@ func main() {
 		logrus.SetLevel(logrus.InfoLevel)
 	}
 
-	// Set background context
-	ctx := context.Background()
-
 	// Create a new P2PHost
-	p2phost := src.NewP2P(ctx)
-	// Connect to fellow Service CID providers
-	p2phost.Connect()
+	p2phost := src.NewP2P()
+	// Connect to peers
+	p2phost.AdvertiseConnect()
 
 	// Join the chat room
 	chatapp, _ := src.JoinChatRoom(p2phost, *username, *chatroom)
