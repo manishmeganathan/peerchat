@@ -40,6 +40,7 @@ func main() {
 	username := flag.String("user", "", "username to use in the chatroom.")
 	chatroom := flag.String("room", "", "chatroom to join.")
 	loglevel := flag.String("log", "", "level of logs to print.")
+	discovery := flag.String("discover", "", "method to use for discovery.")
 	// Parse input flags
 	flag.Parse()
 
@@ -65,15 +66,23 @@ func main() {
 
 	// Create a new P2PHost
 	p2phost := src.NewP2P()
-	// Connect to peers
-	p2phost.AdvertiseConnect()
+
+	// Connect to peers with the chosen discovery method
+	switch *discovery {
+	case "announce":
+		p2phost.AnnounceConnect()
+	case "advertise":
+		p2phost.AdvertiseConnect()
+	default:
+		p2phost.AdvertiseConnect()
+	}
 
 	// Join the chat room
 	chatapp, _ := src.JoinChatRoom(p2phost, *username, *chatroom)
 
 	// Display the welcome figlet
 	fmt.Print(figlet)
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 5)
 
 	// Create the Chat UI
 	ui := src.NewUI(chatapp)
