@@ -20,23 +20,23 @@ install:
 
 build-windows:
 	@echo Cross Compiling PeerChat for Windows x86
-	@GOOS=windows GOARCH=386 go build -o ./bin/windows/x32/
+	@GOOS=windows GOARCH=386 go build -o ./bin/peerchat-windows-x32.exe
 	@echo Cross Compiling PeerChat for Windows x64
-	@GOOS=windows GOARCH=amd64 go build -o ./bin/windows/x64/
+	@GOOS=windows GOARCH=amd64 go build -o ./bin/peerchat-windows-x64.exe
 
 build-darwin:
 	@echo Cross Compiling PeerChat for MacOSX x64
-	@GOOS=darwin GOARCH=amd64 go build -o ./bin/darwin/x64/
+	@GOOS=darwin GOARCH=amd64 go build -o ./bin/peerchat-darwin-x64
 
 build-linux:
+	@echo Cross Compiling PeerChat for Linux x32
+	@GOOS=linux GOARCH=386 go build -o ./bin/peerchat-linux-x32
 	@echo Cross Compiling PeerChat for Linux x64
-	@GOOS=linux GOARCH=386 go build -o ./bin/linux/x32/
-	@echo Cross Compiling PeerChat for Linux x64
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/linux/x64/
+	@GOOS=linux GOARCH=amd64 go build -o ./bin/peerchat-linux-x64
 	@echo Cross Compiling PeerChat for Linux Arm32
-	@GOOS=linux GOARCH=arm go build -o ./bin/linux/arm32/
+	@GOOS=linux GOARCH=arm go build -o ./bin/peerchat-linux-arm32
 	@echo Cross Compiling PeerChat for Linux Arm64
-	@GOOS=linux GOARCH=arm64 go build -o ./bin/linux/arm64/
+	@GOOS=linux GOARCH=arm64 go build -o ./bin/peerchat-linux-arm64
 
 build-all: build-windows build-darwin build-linux
 	@echo Cross Compiled PeerChat for all platforms
