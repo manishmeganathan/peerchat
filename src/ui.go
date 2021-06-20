@@ -200,11 +200,7 @@ func (ui *UI) starteventhandler() {
 
 		case input := <-ui.InputChan:
 			// Send the message to the peers
-			err := ui.ChatRoom.Publish(input)
-			// Check for an error
-			if err != nil {
-				ui.display_logmessage(uilog{logprefix: "error", logmsg: "message publish failed!"})
-			}
+			ui.ChatRoom.PublishQueue <- input
 			// Add the message to the message box as a self message
 			ui.display_selfmessage(input)
 
@@ -219,6 +215,10 @@ func (ui *UI) starteventhandler() {
 		case msg := <-ui.ChatRoom.Messages:
 			// Print the recieved messages to the message box
 			ui.display_chatmessage(msg)
+
+		case log := <-ui.ChatRoom.Logs:
+			// Add the log to the message box
+			ui.display_logmessage(log)
 
 		case <-refreshticker.C:
 			// Refresh the list of peers in the chat room periodically
