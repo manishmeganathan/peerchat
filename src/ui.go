@@ -257,6 +257,8 @@ func (ui *UI) handlecommand(cmd uicommand) {
 		if cmd.cmdarg == "" {
 			ui.LogChan <- uilog{logprefix: "badcmd", logmsg: "missing room name for command"}
 		} else {
+			ui.LogChan <- uilog{logprefix: "roomchange", logmsg: fmt.Sprintf("joining new room '%s'", cmd.cmdarg)}
+
 			// Create a reference to the current chatroom
 			oldchatroom := ui.ChatRoom
 
@@ -269,7 +271,10 @@ func (ui *UI) handlecommand(cmd uicommand) {
 
 			// Assign the new chat room to UI
 			ui.ChatRoom = newchatroom
-			// Exit the old chatroom
+			// Sleep for a second to give time for the queues to adapt
+			time.Sleep(time.Second * 1)
+
+			// Exit the old chatroom and pause for two seconds
 			oldchatroom.Exit()
 
 			// Clear the UI message box
