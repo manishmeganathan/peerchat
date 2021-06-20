@@ -200,7 +200,7 @@ func (ui *UI) starteventhandler() {
 
 		case input := <-ui.InputChan:
 			// Send the message to the peers
-			ui.ChatRoom.PublishQueue <- input
+			ui.PublishQueue <- input
 			// Add the message to the message box as a self message
 			ui.display_selfmessage(input)
 
@@ -224,7 +224,7 @@ func (ui *UI) starteventhandler() {
 			// Refresh the list of peers in the chat room periodically
 			ui.syncpeerbox()
 
-		case <-ui.ChatRoom.ctx.Done():
+		case <-ui.psctx.Done():
 			// End the event loop
 			return
 
@@ -251,20 +251,32 @@ func (ui *UI) handlecommand(cmd uicommand) {
 	case "/clear":
 		// Clear the UI message box
 		ui.MessageBox.Clear()
-		// Refresh the UI
-		ui.TerminalApp.Draw()
 
 	// Check for the room change command
 	case "/room":
 		if cmd.cmdarg == "" {
 			ui.LogChan <- uilog{logprefix: "badcmd", logmsg: "missing room name for command"}
 		} else {
-			// Update the chat room name
-			ui.ChatRoom.UpdateRoom(cmd.cmdarg)
+			// Create a reference to the current chatroom
+			oldchatroom := ui.ChatRoom
+
+			// Create a new chatroom and join it
+			newchatroom, err := JoinChatRoom(ui.Host, ui.UserName, cmd.cmdarg)
+			if err != nil {
+				ui.LogChan <- uilog{logprefix: "jumperr", logmsg: fmt.Sprintf("could not change chat room - %s", err)}
+				return
+			}
+
+			// Assign the new chat room to UI
+			ui.ChatRoom = newchatroom
+			// Exit the old chatroom
+			oldchatroom.Exit()
+
+			// Clear the UI message box
+			ui.MessageBox.Clear()
+
 			// Update the chat room UI element
 			ui.MessageBox.SetTitle(fmt.Sprintf("ChatRoom-%s", ui.ChatRoom.RoomName))
-			// Refresh the UI
-			ui.TerminalApp.Draw()
 		}
 
 	// Check for the user change command
@@ -276,8 +288,6 @@ func (ui *UI) handlecommand(cmd uicommand) {
 			ui.ChatRoom.UpdateUser(cmd.cmdarg)
 			// Update the chat room UI element
 			ui.InputBox.SetLabel(ui.ChatRoom.UserName + " > ")
-			// Refresh the UI
-			ui.TerminalApp.Draw()
 		}
 
 	// Unsupported command
