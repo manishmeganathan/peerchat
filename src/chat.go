@@ -3,6 +3,7 @@ package src
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -53,7 +54,7 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 	ps := p2phost.PubSub
 
 	// Create a PubSub topic with the room name
-	topic, err := ps.Join(roomname)
+	topic, err := ps.Join(fmt.Sprintf("room-peerchat-%s", roomname))
 	// Check the error
 	if err != nil {
 		return nil, err
