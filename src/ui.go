@@ -10,7 +10,7 @@ import (
 )
 
 // Represents the app version
-const AppVer = "v0.1.0"
+const appversion = "v1.0.0"
 
 // A structure that represents the ChatRoom UI
 type UI struct {
@@ -50,7 +50,7 @@ func NewUI(cr *ChatRoom) *UI {
 
 	// Create a title box
 	titlebox := tview.NewTextView().
-		SetText(fmt.Sprintf("PeerChat. A P2P Chat Application. %s", AppVer)).
+		SetText(fmt.Sprintf("PeerChat. A P2P Chat Application. %s", appversion)).
 		SetTextColor(tcell.ColorWhite).
 		SetTextAlign(tview.AlignCenter)
 
