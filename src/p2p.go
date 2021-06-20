@@ -3,17 +3,21 @@ package src
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"sync"
+	"time"
 
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/crypto"
+	"github.com/libp2p/go-libp2p-core/peer"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	host "github.com/libp2p/go-libp2p-host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	tls "github.com/libp2p/go-libp2p-tls"
-	yamux "github.com/libp2p/go-libp2p-yamux"
-	"github.com/libp2p/go-tcp-transport"
+	"github.com/mr-tron/base58/base58"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multihash"
 	"github.com/sirupsen/logrus"
 )
 
@@ -51,20 +55,20 @@ func NewP2P(ctx context.Context) *P2P {
 
 	// Set up the host identity options
 	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
-	identity := libp2p.Identity(prvkey)
+	//identity := libp2p.Identity(prvkey)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
-		}).Fatalln("P2P Identity Generation Failed!")
+		}).Fatalln("P2P Identity Generation Failed!", prvkey)
 	}
 
 	// Debug log
 	logrus.Debugln("Created Identity Configurations for the P2P Host.")
 
 	// Set up TLS secured transport options
-	tlstransport, err := tls.New(prvkey)
-	security := libp2p.Security(tls.ID, tlstransport)
+	//tlstransport, err := tls.New(prvkey)
+	//security := libp2p.Security(tls.ID, tlstransport)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -89,15 +93,23 @@ func NewP2P(ctx context.Context) *P2P {
 	logrus.Debugln("Created Port Listening Address Configurations for the P2P Host.")
 
 	// Set up the transport, stream mux and NAT options
-	transport := libp2p.Transport(tcp.NewTCPTransport)
-	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
+	//transport := libp2p.Transport(tcp.NewTCPTransport)
+	//muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
 	nat := libp2p.NATPortMap()
 
 	// Debug log
 	logrus.Debugln("Created Transport, Stream Multiplexer and NAT Configurations for the P2P Host.")
 
 	// Construct a new LibP2P host with the options
-	libhost, err := libp2p.New(ctx, listen, security, transport, muxer, identity, nat)
+	libhost, err := libp2p.New(
+		ctx,
+		listen,
+		//security,
+		//transport,
+		//muxer,
+		//identity,
+		nat,
+	)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -135,6 +147,41 @@ func NewP2P(ctx context.Context) *P2P {
 	// Debug log
 	logrus.Debugln("Bootstrapped Kademlia DHT.")
 
+	// Declare a WaitGroup
+	var wg sync.WaitGroup
+	// Declare counters for the number of bootstrap peers
+	var connectedbootpeers int
+	var totalbootpeers int
+
+	// Iterate over the default bootstrap peers provided by libp2p
+	for _, peeraddr := range dht.DefaultBootstrapPeers {
+		// Retrieve the peer address information
+		peerinfo, _ := peer.AddrInfoFromP2pAddr(peeraddr)
+
+		// Incremenent waitgroup counter
+		wg.Add(1)
+		// Start a goroutine to connect to each bootstrap peer
+		go func() {
+			// Defer the waitgroup decrement
+			defer wg.Done()
+			// Attempt to connect to the bootstrap peer
+			if err := libhost.Connect(ctx, *peerinfo); err != nil {
+				// Increment the total bootstrap peer count
+				totalbootpeers++
+			} else {
+				// Increment the connected bootstrap peer count
+				connectedbootpeers++
+				// Increment the total bootstrap peer count
+				totalbootpeers++
+			}
+		}()
+	}
+
+	// Wait for the waitgroup to complete
+	wg.Wait()
+	// Log the number of bootstrap peers connected
+	logrus.Infof("Success! Connected to %d out of %d Bootstrap Peers", connectedbootpeers, totalbootpeers)
+
 	// Create a peer discovery service using the Kad DHT
 	routingdiscovery := discovery.NewRoutingDiscovery(kaddht)
 
@@ -142,7 +189,7 @@ func NewP2P(ctx context.Context) *P2P {
 	logrus.Debugln("Created Peer Discovery Service.")
 
 	// Create a new PubSub service which uses a GossipSub router
-	gossipsub, err := pubsub.NewGossipSub(ctx, libhost, pubsub.WithDiscovery(routingdiscovery))
+	gossipsub, err := pubsub.NewGossipSub(ctx, libhost) //, pubsub.WithDiscovery(routingdiscovery))
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -170,10 +217,13 @@ func NewP2P(ctx context.Context) *P2P {
 func (p2p *P2P) Connect() {
 
 	// Advertise the availabilty of the service on this node
-	discovery.Advertise(p2p.Ctx, p2p.Discovery, service)
+	// discovery.Advertise(p2p.Ctx, p2p.Discovery, service)
+
+	timed, err := p2p.Discovery.Advertise(p2p.Ctx, service)
+	time.Sleep(time.Second * 5)
 
 	// Debug log
-	logrus.Debugln("Advertised Peerchat Service.")
+	logrus.Debugln("Advertised Peerchat Service.", timed)
 
 	// Find all peers advertising the same service
 	peerchan, err := p2p.Discovery.FindPeers(p2p.Ctx, service)
@@ -197,15 +247,66 @@ func (p2p *P2P) Connect() {
 			}
 
 			// Connect to the peer
-			if err := p2p.Host.Connect(p2p.Ctx, peer); err != nil {
-				// Handle any potential error
-				logrus.WithFields(logrus.Fields{
-					"error": err.Error(),
-				}).Fatalln("P2P Peer Connection Failed!")
-			}
+			p2p.Host.Connect(context.Background(), peer)
 		}
 	}()
 
 	// Debug log
 	logrus.Debugln("Started Peer Connection Handler.")
+}
+
+func (p2p *P2P) Connect2() {
+
+	hash := sha256.Sum256([]byte(service))
+	// Append the hash with the hashing codec ID for SHA2-256 (0x12),
+	// the digest size (0x20) and the hash of the service content ID
+	finalhash := append([]byte{0x12, 0x20}, hash[:]...)
+	// Encode the fullhash to Base58
+	b58string := base58.Encode(finalhash)
+
+	// Generate a Multihash from the base58 string
+	mulhash, err := multihash.FromB58String(string(b58string))
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Multihash Generation for Service Content ID Failed!")
+	}
+
+	// Generate a CID from the Multihash
+	cidvalue := cid.NewCidV1(12, mulhash)
+
+	// Announce that this host can provide the service CID
+	err = p2p.KadDHT.Provide(p2p.Ctx, cidvalue, true)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Service Content ID Announcement Failed!")
+	}
+
+	// Find the other providers for the service CID
+	peers, err := p2p.KadDHT.FindProviders(p2p.Ctx, cidvalue)
+	// Log any potential error
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("Provider Discovery Failed!")
+	}
+
+	// Declare a peer counter
+	var peercount int
+
+	// Iterate over the discovered peers
+	for _, peer := range peers {
+		// Ignore if the discovered peer
+		if peer.ID == p2p.Host.ID() {
+			continue
+		}
+		// Connect to the peer
+		if err := p2p.Host.Connect(p2p.Ctx, peer); err == nil {
+			// Increment peer count
+			peercount++
+		}
+	}
+
+	logrus.Infof("Connected to %d Peers", peercount)
 }
