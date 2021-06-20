@@ -16,13 +16,16 @@ const defaultuser = "newuser"
 const defaultroom = "lobby"
 
 type ChatRoom struct {
+	Host *P2P
+
 	// Represents the channel of incoming messages
 	Messages chan *ChatMessage
 	// Represents the channel of logs
 	Logs chan uilog
 
 	// Represents the chat room lifecycle context
-	ctx context.Context
+	psctx    context.Context
+	pscancel context.CancelFunc
 	// Represents the Pubsub fields
 	psrouter     *pubsub.PubSub
 	pstopic      *pubsub.Topic
@@ -35,10 +38,6 @@ type ChatRoom struct {
 
 	// Represents the message publish queue
 	PublishQueue chan string
-
-	// Represent the pub/sub terminator channels
-	PubTermQueue chan struct{}
-	SubTermQueue chan struct{}
 }
 
 type ChatMessage struct {
@@ -79,9 +78,13 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 		roomname = defaultroom
 	}
 
+	pubsubctx, cancel := context.WithCancel(context.Background())
+
 	// Create a ChatRoom object
 	chatroom := &ChatRoom{
-		ctx:          p2phost.Ctx,
+		Host:         p2phost,
+		psctx:        pubsubctx,
+		pscancel:     cancel,
 		psrouter:     ps,
 		pstopic:      topic,
 		subscription: sub,
@@ -90,8 +93,6 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 		SelfID:       p2phost.Host.ID(),
 		Messages:     make(chan *ChatMessage),
 		PublishQueue: make(chan string),
-		PubTermQueue: make(chan struct{}),
-		SubTermQueue: make(chan struct{}),
 	}
 
 	// Start the subscription read loop
@@ -108,7 +109,7 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 func (cr *ChatRoom) PubLoop() {
 	for {
 		select {
-		case <-cr.PubTermQueue:
+		case <-cr.psctx.Done():
 			return
 
 		case message := <-cr.PublishQueue:
@@ -127,7 +128,7 @@ func (cr *ChatRoom) PubLoop() {
 			}
 
 			// Publish the message to the topic
-			err = cr.pstopic.Publish(cr.ctx, messagebytes)
+			err = cr.pstopic.Publish(cr.psctx, messagebytes)
 			if err != nil {
 				cr.Logs <- uilog{logprefix: "puberr", logmsg: "could not publish to topic"}
 				continue
@@ -143,12 +144,12 @@ func (cr *ChatRoom) SubLoop() {
 	// Start loop
 	for {
 		select {
-		case <-cr.SubTermQueue:
+		case <-cr.psctx.Done():
 			return
 
 		default:
 			// Read a message from the subscription
-			message, err := cr.subscription.Next(cr.ctx)
+			message, err := cr.subscription.Next(cr.psctx)
 			// Check error
 			if err != nil {
 				// Close the messages queue (subscription has closed)
@@ -186,40 +187,13 @@ func (cr *ChatRoom) PeerList() []peer.ID {
 
 // A method of ChatRoom that updates the chat
 // room by subscribing to the new topic
-func (cr *ChatRoom) UpdateRoom(roomname string) error {
-	cr.PubTermQueue <- struct{}{}
-	cr.SubTermQueue <- struct{}{}
+func (cr *ChatRoom) Exit() {
+	defer cr.pscancel()
 
 	// Cancel the existing subscription
 	cr.subscription.Cancel()
-
-	// Create a PubSub topic with the room name
-	newtopic, err := cr.psrouter.Join(roomname)
-	// Check the error
-	if err != nil {
-		return err
-	}
-
-	// Subscribe to the new PubSub topic
-	newsub, err := newtopic.Subscribe()
-	// Check the error
-	if err != nil {
-		return err
-	}
-
-	// Assign the new roomname
-	cr.RoomName = roomname
-	// Assign the new pubsub topic and subscription
-	cr.pstopic = newtopic
-	cr.subscription = newsub
-
-	// Start the subscription read loop
-	go cr.SubLoop()
-	// Start the publish loop
-	go cr.PubLoop()
-
-	// Return no errors
-	return nil
+	// Close the topic handler
+	cr.pstopic.Close()
 }
 
 // A method of ChatRoom that updates the chat user name
