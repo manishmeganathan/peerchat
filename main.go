@@ -87,7 +87,7 @@ func main() {
 
 	// Join the chat room
 	chatapp, _ := src.JoinChatRoom(p2phost, *username, *chatroom)
-	logrus.Infof("Joined the '%s' chatroom as '%s'", *chatroom, *username)
+	logrus.Infof("Joined the '%s' chatroom as '%s'", chatapp.RoomName, chatapp.UserName)
 
 	// Wait for network setup to complete
 	time.Sleep(time.Second * 5)
