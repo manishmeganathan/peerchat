@@ -9,12 +9,16 @@ import (
 
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
+	connmgr "github.com/libp2p/go-libp2p-connmgr"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	host "github.com/libp2p/go-libp2p-host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	tls "github.com/libp2p/go-libp2p-tls"
+	yamux "github.com/libp2p/go-libp2p-yamux"
+	"github.com/libp2p/go-tcp-transport"
 	"github.com/mr-tron/base58/base58"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
@@ -103,7 +107,7 @@ func (p2p *P2P) AdvertiseConnect() {
 	// Sleep to give time for the advertisment to propogate
 	time.Sleep(time.Second * 5)
 	// Debug log
-	logrus.Debugln("Service Time-to-Live is %s", ttl)
+	logrus.Debugf("Service Time-to-Live is %s", ttl)
 
 	// Find all peers advertising the same service
 	peerchan, err := p2p.Discovery.FindPeers(p2p.Ctx, service)
@@ -161,33 +165,34 @@ func (p2p *P2P) AnnounceConnect() {
 func setupHost(ctx context.Context) host.Host {
 	// Set up the host identity options
 	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
-	//identity := libp2p.Identity(prvkey)
+	identity := libp2p.Identity(prvkey)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
-		}).Fatalln("Failed to Generate P2P Identity Configuration!", prvkey)
+		}).Fatalln("Failed to Generate P2P Identity Configuration!")
 	}
 
 	// Debug log
-	logrus.Debugln("Generated P2P Identity Configurations.")
+	logrus.Debugln("Generated P2P Identity Configuration.")
 
-	// Set up TLS secured transport options
-	//tlstransport, err := tls.New(prvkey)
-	//security := libp2p.Security(tls.ID, tlstransport)
+	// Set up TLS secured TCP transport and options
+	tlstransport, err := tls.New(prvkey)
+	security := libp2p.Security(tls.ID, tlstransport)
+	transport := libp2p.Transport(tcp.NewTCPTransport)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
-		}).Fatalln("Failed to Generate P2P Secure Transport Configuration!")
+		}).Fatalln("Failed to Generate P2P Security and Transport Configurations!")
 	}
 
 	// Debug log
-	logrus.Debugln("Generated P2P Security Configurations.")
+	logrus.Debugln("Generated P2P Security and Transport Configurations.")
 
 	// Set up host listener address options
-	sourcemultiaddr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
-	listen := libp2p.ListenAddrs(sourcemultiaddr)
+	muladdr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
+	listen := libp2p.ListenAddrs(muladdr)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
@@ -198,24 +203,18 @@ func setupHost(ctx context.Context) host.Host {
 	// Debug log
 	logrus.Debugln("Generated P2P Address Listener Configuration.")
 
-	// Set up the transport, stream mux and NAT options
-	//transport := libp2p.Transport(tcp.NewTCPTransport)
-	//muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
+	// Set up the stream mux, connection manager and NAT options
+	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
+	conn := libp2p.ConnectionManager(connmgr.NewConnManager(100, 400, time.Minute))
 	nat := libp2p.NATPortMap()
 
 	// Debug log
-	logrus.Debugln("Generated P2P Transport, Stream Multiplexer and NAT Configurations.")
+	logrus.Debugln("Generated P2P Stream Multiplexer, Connection Manager and NAT Configurations.")
+
+	opts := libp2p.ChainOptions(identity, listen, security, transport, muxer, nat, conn)
 
 	// Construct a new libP2P host with the created options
-	libhost, err := libp2p.New(
-		ctx,
-		listen,
-		//security,
-		//transport,
-		//muxer,
-		//identity,
-		nat,
-	)
+	libhost, err := libp2p.New(ctx, opts)
 	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
