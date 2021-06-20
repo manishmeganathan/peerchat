@@ -61,28 +61,28 @@ func NewP2P() *P2P {
 
 	// Setup a P2P Host Node
 	nodehost := setupHost(ctx)
-	// Info log
-	logrus.Infoln("Created the P2P Host.")
+	// Debug log
+	logrus.Debugln("Created the P2P Host.")
 
 	// Create and Setup a Kademlia DHT on the host
 	kaddht := setupKadDHT(ctx, nodehost)
-	// Info log
-	logrus.Infoln("Created the Kademlia DHT on the P2P Host.")
+	// Debug log
+	logrus.Debugln("Created the Kademlia DHT on the P2P Host.")
 
 	// Bootstrap the Kad DHT
 	bootstrapDHT(ctx, nodehost, kaddht)
-	// Info log
-	logrus.Infoln("Bootstrapped the Kademlia DHT and Connected to Bootstrap Peers")
+	// Debug log
+	logrus.Debugln("Bootstrapped the Kademlia DHT and Connected to Bootstrap Peers")
 
 	// Create a peer discovery service using the Kad DHT
 	routingdiscovery := discovery.NewRoutingDiscovery(kaddht)
-	// Info log
-	logrus.Infoln("Created the Peer Discovery Service.")
+	// Debug log
+	logrus.Debugln("Created the Peer Discovery Service.")
 
 	// Create a PubSub handler with the routing discovery
 	pubsubhandler := setupPubSub(ctx, nodehost, routingdiscovery)
 	// Debug log
-	logrus.Infoln("Created the PubSub Handler.")
+	logrus.Debugln("Created the PubSub Handler.")
 
 	// Return the P2P object
 	return &P2P{
@@ -102,8 +102,8 @@ func NewP2P() *P2P {
 func (p2p *P2P) AdvertiseConnect() {
 	// Advertise the availabilty of the service on this node
 	ttl, err := p2p.Discovery.Advertise(p2p.Ctx, service)
-	// Info log
-	logrus.Infoln("Advertised the PeerChat Service.")
+	// Debug log
+	logrus.Debugln("Advertised the PeerChat Service.")
 	// Sleep to give time for the advertisment to propogate
 	time.Sleep(time.Second * 5)
 	// Debug log
@@ -117,13 +117,13 @@ func (p2p *P2P) AdvertiseConnect() {
 			"error": err.Error(),
 		}).Fatalln("P2P Peer Discovery Failed!")
 	}
-	// Debug log
-	logrus.Debugln("Discovered PeerChat Service Peers.")
+	// Trace log
+	logrus.Traceln("Discovered PeerChat Service Peers.")
 
 	// Connect to peers as they are discovered
 	go handlePeerDiscovery(p2p.Host, peerchan)
-	// Debug log
-	logrus.Debugln("Started Peer Connection Handler.")
+	// Trace log
+	logrus.Traceln("Started Peer Connection Handler.")
 }
 
 // A method of P2P to connect to service peers.
@@ -134,8 +134,8 @@ func (p2p *P2P) AdvertiseConnect() {
 func (p2p *P2P) AnnounceConnect() {
 	// Generate the Service CID
 	cidvalue := generateCID(service)
-	// Debug log
-	logrus.Debugln("Generated the Service CID.")
+	// Trace log
+	logrus.Traceln("Generated the Service CID.")
 
 	// Announce that this host can provide the service CID
 	err := p2p.KadDHT.Provide(p2p.Ctx, cidvalue, true)
@@ -144,20 +144,20 @@ func (p2p *P2P) AnnounceConnect() {
 			"error": err.Error(),
 		}).Fatalln("Failed to Announce Service CID!")
 	}
-	// Info log
-	logrus.Infoln("Announced the PeerChat Service.")
+	// Debug log
+	logrus.Debugln("Announced the PeerChat Service.")
 	// Sleep to give time for the advertisment to propogate
 	time.Sleep(time.Second * 5)
 
 	// Find the other providers for the service CID
 	peerchan := p2p.KadDHT.FindProvidersAsync(p2p.Ctx, cidvalue, 0)
-	// Debug log
-	logrus.Debugln("Discovered PeerChat Service Peers.")
+	// Trace log
+	logrus.Traceln("Discovered PeerChat Service Peers.")
 
 	// Connect to peers as they are discovered
 	go handlePeerDiscovery(p2p.Host, peerchan)
-	// Info log
-	logrus.Infoln("Started Peer Connection Handler.")
+	// Debug log
+	logrus.Debugln("Started Peer Connection Handler.")
 }
 
 // A function that generates the p2p configuration options and creates a
@@ -173,8 +173,8 @@ func setupHost(ctx context.Context) host.Host {
 		}).Fatalln("Failed to Generate P2P Identity Configuration!")
 	}
 
-	// Debug log
-	logrus.Debugln("Generated P2P Identity Configuration.")
+	// Trace log
+	logrus.Traceln("Generated P2P Identity Configuration.")
 
 	// Set up TLS secured TCP transport and options
 	tlstransport, err := tls.New(prvkey)
@@ -187,8 +187,8 @@ func setupHost(ctx context.Context) host.Host {
 		}).Fatalln("Failed to Generate P2P Security and Transport Configurations!")
 	}
 
-	// Debug log
-	logrus.Debugln("Generated P2P Security and Transport Configurations.")
+	// Trace log
+	logrus.Traceln("Generated P2P Security and Transport Configurations.")
 
 	// Set up host listener address options
 	muladdr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
@@ -200,16 +200,16 @@ func setupHost(ctx context.Context) host.Host {
 		}).Fatalln("Failed to Generate P2P Address Listener Configuration!")
 	}
 
-	// Debug log
-	logrus.Debugln("Generated P2P Address Listener Configuration.")
+	// Trace log
+	logrus.Traceln("Generated P2P Address Listener Configuration.")
 
 	// Set up the stream mux, connection manager and NAT options
 	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
 	conn := libp2p.ConnectionManager(connmgr.NewConnManager(100, 400, time.Minute))
 	nat := libp2p.NATPortMap()
 
-	// Debug log
-	logrus.Debugln("Generated P2P Stream Multiplexer, Connection Manager and NAT Configurations.")
+	// Trace log
+	logrus.Traceln("Generated P2P Stream Multiplexer, Connection Manager and NAT Configurations.")
 
 	opts := libp2p.ChainOptions(identity, listen, security, transport, muxer, nat, conn)
 
@@ -235,8 +235,8 @@ func setupKadDHT(ctx context.Context, nodehost host.Host) *dht.IpfsDHT {
 	// Create the DHT bootstrap peers option
 	dhtpeers := dht.BootstrapPeers(bootstrappeers...)
 
-	// Debug log
-	logrus.Debugln("Generated DHT Configuration.")
+	// Trace log
+	logrus.Traceln("Generated DHT Configuration.")
 
 	// Start a Kademlia DHT on the host in server mode
 	kaddht, err := dht.New(ctx, nodehost, dhtmode, dhtpeers)
@@ -278,8 +278,8 @@ func bootstrapDHT(ctx context.Context, nodehost host.Host, kaddht *dht.IpfsDHT) 
 		}).Fatalln("Failed to Bootstrap the Kademlia!")
 	}
 
-	// Debug log
-	logrus.Debugln("Set the Kademlia DHT into Bootstrap Mode.")
+	// Trace log
+	logrus.Traceln("Set the Kademlia DHT into Bootstrap Mode.")
 
 	// Declare a WaitGroup
 	var wg sync.WaitGroup
