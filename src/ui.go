@@ -12,19 +12,24 @@ import (
 // Represents the app version
 const AppVer = "v0.1.0"
 
-// A structure that represents the Chat UI
+// A structure that represents the ChatRoom UI
 type UI struct {
+	// Represents the ChatRoom (embedded)
 	*ChatRoom
+	// Represents the tview application
 	TerminalApp *tview.Application
 
-	PeerBox    *tview.TextView
-	MessageBox *tview.TextView
-	InputBox   *tview.InputField
+	// Represents the user message input queue
+	MsgInputs chan string
+	// Represents the user command input queue
+	CmdInputs chan uicommand
 
-	InputChan chan string
-	LogChan   chan uilog
-	CmdChan   chan uicommand
-	TermChan  chan struct{}
+	// Represents the UI element with the list of peers
+	peerBox *tview.TextView
+	// Represents the UI element with the chat messages and logs
+	messageBox *tview.TextView
+	// Represents the UI element for the input field
+	inputBox *tview.InputField
 }
 
 // A structure that represents a UI command
@@ -33,21 +38,15 @@ type uicommand struct {
 	cmdarg  string
 }
 
-// A structure that represents a UI log
-type uilog struct {
-	logprefix string
-	logmsg    string
-}
-
 // A constructor function that generates and
 // returns a new UI for a given ChatRoom
 func NewUI(cr *ChatRoom) *UI {
 	// Create a new Tview App
 	app := tview.NewApplication()
-	// Initialize the cmd, log and input channels
+
+	// Initialize the command and message input channels
 	cmdchan := make(chan uicommand)
-	inputchan := make(chan string)
-	logchan := make(chan uilog)
+	msgchan := make(chan string)
 
 	// Create a title box
 	titlebox := tview.NewTextView().
@@ -138,14 +137,11 @@ func NewUI(cr *ChatRoom) *UI {
 			// Send the command
 			cmdchan <- uicommand{cmdtype: cmdparts[0], cmdarg: cmdparts[1]}
 
-			// Reset the input field
-			input.SetText("")
-			// Commands are ignored in the message box
-			return
+		} else {
+			// Send the message
+			msgchan <- line
 		}
 
-		// Send the message to the input channel
-		inputchan <- line
 		// Reset the input field
 		input.SetText("")
 	})
@@ -167,13 +163,11 @@ func NewUI(cr *ChatRoom) *UI {
 	return &UI{
 		ChatRoom:    cr,
 		TerminalApp: app,
-		PeerBox:     peerbox,
-		MessageBox:  messagebox,
-		InputBox:    input,
-		LogChan:     logchan,
-		InputChan:   inputchan,
-		CmdChan:     cmdchan,
-		TermChan:    make(chan struct{}, 1),
+		peerBox:     peerbox,
+		messageBox:  messagebox,
+		inputBox:    input,
+		MsgInputs:   msgchan,
+		CmdInputs:   cmdchan,
 	}
 }
 
@@ -187,7 +181,7 @@ func (ui *UI) Run() error {
 
 // A method of UI that closes the UI app
 func (ui *UI) Close() {
-	ui.TermChan <- struct{}{}
+	ui.pscancel()
 }
 
 // A method of UI that handles UI events
@@ -198,25 +192,21 @@ func (ui *UI) starteventhandler() {
 	for {
 		select {
 
-		case input := <-ui.InputChan:
-			// Send the message to the peers
-			ui.PublishQueue <- input
+		case msg := <-ui.MsgInputs:
+			// Send the message to outbound queue
+			ui.Outbound <- msg
 			// Add the message to the message box as a self message
-			ui.display_selfmessage(input)
+			ui.display_selfmessage(msg)
 
-		case cmd := <-ui.CmdChan:
+		case cmd := <-ui.CmdInputs:
 			// Handle the recieved command
 			go ui.handlecommand(cmd)
 
-		case log := <-ui.LogChan:
-			// Add the log to the message box
-			ui.display_logmessage(log)
-
-		case msg := <-ui.ChatRoom.Messages:
+		case msg := <-ui.Inbound:
 			// Print the recieved messages to the message box
 			ui.display_chatmessage(msg)
 
-		case log := <-ui.ChatRoom.Logs:
+		case log := <-ui.Logs:
 			// Add the log to the message box
 			ui.display_logmessage(log)
 
@@ -227,11 +217,6 @@ func (ui *UI) starteventhandler() {
 		case <-ui.psctx.Done():
 			// End the event loop
 			return
-
-		case <-ui.TermChan:
-			// End the event loop
-			return
-
 		}
 	}
 }
@@ -250,14 +235,14 @@ func (ui *UI) handlecommand(cmd uicommand) {
 	// Check for the clear command
 	case "/clear":
 		// Clear the UI message box
-		ui.MessageBox.Clear()
+		ui.messageBox.Clear()
 
 	// Check for the room change command
 	case "/room":
 		if cmd.cmdarg == "" {
-			ui.LogChan <- uilog{logprefix: "badcmd", logmsg: "missing room name for command"}
+			ui.Logs <- chatlog{logprefix: "badcmd", logmsg: "missing room name for command"}
 		} else {
-			ui.LogChan <- uilog{logprefix: "roomchange", logmsg: fmt.Sprintf("joining new room '%s'", cmd.cmdarg)}
+			ui.Logs <- chatlog{logprefix: "roomchange", logmsg: fmt.Sprintf("joining new room '%s'", cmd.cmdarg)}
 
 			// Create a reference to the current chatroom
 			oldchatroom := ui.ChatRoom
@@ -265,7 +250,7 @@ func (ui *UI) handlecommand(cmd uicommand) {
 			// Create a new chatroom and join it
 			newchatroom, err := JoinChatRoom(ui.Host, ui.UserName, cmd.cmdarg)
 			if err != nil {
-				ui.LogChan <- uilog{logprefix: "jumperr", logmsg: fmt.Sprintf("could not change chat room - %s", err)}
+				ui.Logs <- chatlog{logprefix: "jumperr", logmsg: fmt.Sprintf("could not change chat room - %s", err)}
 				return
 			}
 
@@ -278,59 +263,58 @@ func (ui *UI) handlecommand(cmd uicommand) {
 			oldchatroom.Exit()
 
 			// Clear the UI message box
-			ui.MessageBox.Clear()
-
+			ui.messageBox.Clear()
 			// Update the chat room UI element
-			ui.MessageBox.SetTitle(fmt.Sprintf("ChatRoom-%s", ui.ChatRoom.RoomName))
+			ui.messageBox.SetTitle(fmt.Sprintf("ChatRoom-%s", ui.ChatRoom.RoomName))
 		}
 
 	// Check for the user change command
 	case "/user":
 		if cmd.cmdarg == "" {
-			ui.LogChan <- uilog{logprefix: "badcmd", logmsg: "missing user name for command"}
+			ui.Logs <- chatlog{logprefix: "badcmd", logmsg: "missing user name for command"}
 		} else {
 			// Update the chat user name
-			ui.ChatRoom.UpdateUser(cmd.cmdarg)
+			ui.UpdateUser(cmd.cmdarg)
 			// Update the chat room UI element
-			ui.InputBox.SetLabel(ui.ChatRoom.UserName + " > ")
+			ui.inputBox.SetLabel(ui.UserName + " > ")
 		}
 
 	// Unsupported command
 	default:
-		ui.LogChan <- uilog{logprefix: "badcmd", logmsg: fmt.Sprintf("unsupported command - %s", cmd.cmdtype)}
+		ui.Logs <- chatlog{logprefix: "badcmd", logmsg: fmt.Sprintf("unsupported command - %s", cmd.cmdtype)}
 	}
 }
 
 // A method of UI that displays a message recieved from a peer
-func (ui *UI) display_chatmessage(msg *ChatMessage) {
+func (ui *UI) display_chatmessage(msg chatmessage) {
 	prompt := fmt.Sprintf("[green]<%s>:[-]", msg.SenderName)
-	fmt.Fprintf(ui.MessageBox, "%s %s\n", prompt, msg.Message)
+	fmt.Fprintf(ui.messageBox, "%s %s\n", prompt, msg.Message)
 }
 
 // A method of UI that displays a message recieved from self
 func (ui *UI) display_selfmessage(msg string) {
-	prompt := fmt.Sprintf("[blue]<%s>:[-]", ui.ChatRoom.UserName)
-	fmt.Fprintf(ui.MessageBox, "%s %s\n", prompt, msg)
+	prompt := fmt.Sprintf("[blue]<%s>:[-]", ui.UserName)
+	fmt.Fprintf(ui.messageBox, "%s %s\n", prompt, msg)
 }
 
 // A method of UI that displays a log message
-func (ui *UI) display_logmessage(log uilog) {
+func (ui *UI) display_logmessage(log chatlog) {
 	prompt := fmt.Sprintf("[yellow]<%s>:[-]", log.logprefix)
-	fmt.Fprintf(ui.MessageBox, "%s %s\n", prompt, log.logmsg)
+	fmt.Fprintf(ui.messageBox, "%s %s\n", prompt, log.logmsg)
 }
 
 // A method of UI that refreshes the list of peers
 func (ui *UI) syncpeerbox() {
 	// Retrieve the list of peers from the chatroom
-	peers := ui.ChatRoom.PeerList()
+	peers := ui.PeerList()
 
 	// Clear() is not a threadsafe call
 	// So we acquire the thread lock on it
-	ui.PeerBox.Lock()
+	ui.peerBox.Lock()
 	// Clear the box
-	ui.PeerBox.Clear()
+	ui.peerBox.Clear()
 	// Release the lock
-	ui.PeerBox.Unlock()
+	ui.peerBox.Unlock()
 
 	// Iterate over the list of peers
 	for _, p := range peers {
@@ -339,7 +323,7 @@ func (ui *UI) syncpeerbox() {
 		// Shorten the peer ID
 		peerid = peerid[len(peerid)-8:]
 		// Add the peer ID to the peer box
-		fmt.Fprintln(ui.PeerBox, peerid)
+		fmt.Fprintln(ui.peerBox, peerid)
 	}
 
 	// Refresh the UI
