@@ -9,52 +9,59 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
-// Represents chat room the buffer size for incoming images
-const ChatRoomBufffer = 128
-
-// Represents the default room and user names
+// Represents the default fallback room and user names
+// if they aren't provided when the app is started
 const defaultuser = "newuser"
 const defaultroom = "lobby"
 
+// A structure that represents a PubSub Chat Room
 type ChatRoom struct {
+	// Represents the P2P Host for the ChatRoom
 	Host *P2P
 
 	// Represents the channel of incoming messages
-	Messages chan *ChatMessage
-	// Represents the channel of logs
-	Logs chan uilog
+	Inbound chan chatmessage
+	// Represents the channel of outgoing messages
+	Outbound chan string
+	// Represents the channel of chat log messages
+	Logs chan chatlog
+
+	// Represents the name of the chat room
+	RoomName string
+	// Represent the name of the user in the chat room
+	UserName string
+	// Represents the host ID of the peer
+	selfid peer.ID
 
 	// Represents the chat room lifecycle context
-	psctx    context.Context
+	psctx context.Context
+	// Represents the chat room lifecycle cancellation function
 	pscancel context.CancelFunc
-	// Represents the Pubsub fields
-	psrouter     *pubsub.PubSub
-	pstopic      *pubsub.Topic
-	subscription *pubsub.Subscription
-
-	// Represents the identitiy fields
-	RoomName string
-	UserName string
-	SelfID   peer.ID
-
-	// Represents the message publish queue
-	PublishQueue chan string
+	// Represents the PubSub Topic of the ChatRoom
+	pstopic *pubsub.Topic
+	// Represents the PubSub Subscription for the topic
+	psub *pubsub.Subscription
 }
 
-type ChatMessage struct {
+// A structure that represents a chat message
+type chatmessage struct {
 	Message    string `json:"message"`
 	SenderID   string `json:"senderid"`
 	SenderName string `json:"sendername"`
 }
 
+// A structure that represents a chat log
+type chatlog struct {
+	logprefix string
+	logmsg    string
+}
+
 // A constructor function that generates and returns a new
 // ChatRoom for a given P2PHost, username and roomname
 func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, error) {
-	// Alias the PubSub router from the p2phost
-	ps := p2phost.PubSub
 
 	// Create a PubSub topic with the room name
-	topic, err := ps.Join(fmt.Sprintf("room-peerchat-%s", roomname))
+	topic, err := p2phost.PubSub.Join(fmt.Sprintf("room-peerchat-%s", roomname))
 	// Check the error
 	if err != nil {
 		return nil, err
@@ -79,24 +86,28 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 		roomname = defaultroom
 	}
 
+	// Create cancellable context
 	pubsubctx, cancel := context.WithCancel(context.Background())
 
 	// Create a ChatRoom object
 	chatroom := &ChatRoom{
-		Host:         p2phost,
-		psctx:        pubsubctx,
-		pscancel:     cancel,
-		psrouter:     ps,
-		pstopic:      topic,
-		subscription: sub,
-		RoomName:     roomname,
-		UserName:     username,
-		SelfID:       p2phost.Host.ID(),
-		Messages:     make(chan *ChatMessage),
-		PublishQueue: make(chan string),
+		Host: p2phost,
+
+		Inbound:  make(chan chatmessage),
+		Outbound: make(chan string),
+		Logs:     make(chan chatlog),
+
+		psctx:    pubsubctx,
+		pscancel: cancel,
+		pstopic:  topic,
+		psub:     sub,
+
+		RoomName: roomname,
+		UserName: username,
+		selfid:   p2phost.Host.ID(),
 	}
 
-	// Start the subscription read loop
+	// Start the subscribe loop
 	go chatroom.SubLoop()
 	// Start the publish loop
 	go chatroom.PubLoop()
@@ -105,42 +116,42 @@ func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, er
 	return chatroom, nil
 }
 
-// A method of ChatRoom that publishes a ChatMessage
-// to the PubSub topic (roomname)
+// A method of ChatRoom that publishes a chatmessage
+// to the PubSub topic until the pubsub context closes
 func (cr *ChatRoom) PubLoop() {
 	for {
 		select {
 		case <-cr.psctx.Done():
 			return
 
-		case message := <-cr.PublishQueue:
+		case message := <-cr.Outbound:
 			// Create a ChatMessage
-			m := ChatMessage{
+			m := chatmessage{
 				Message:    message,
-				SenderID:   cr.SelfID.Pretty(),
+				SenderID:   cr.selfid.Pretty(),
 				SenderName: cr.UserName,
 			}
 
 			// Marshal the ChatMessage into a JSON
 			messagebytes, err := json.Marshal(m)
 			if err != nil {
-				cr.Logs <- uilog{logprefix: "puberr", logmsg: "could not marshal JSON"}
+				cr.Logs <- chatlog{logprefix: "puberr", logmsg: "could not marshal JSON"}
 				continue
 			}
 
 			// Publish the message to the topic
 			err = cr.pstopic.Publish(cr.psctx, messagebytes)
 			if err != nil {
-				cr.Logs <- uilog{logprefix: "puberr", logmsg: "could not publish to topic"}
+				cr.Logs <- chatlog{logprefix: "puberr", logmsg: "could not publish to topic"}
 				continue
 			}
 		}
 	}
 }
 
-// A method of ChatRoom that continously read
-// from the subscription until it closes and
-// sends it into the message channel
+// A method of ChatRoom that continously reads from the subscription
+// until either the subscription or pubsub context closes.
+// The recieved message is parsed sent into the inbound channel
 func (cr *ChatRoom) SubLoop() {
 	// Start loop
 	for {
@@ -150,31 +161,31 @@ func (cr *ChatRoom) SubLoop() {
 
 		default:
 			// Read a message from the subscription
-			message, err := cr.subscription.Next(cr.psctx)
+			message, err := cr.psub.Next(cr.psctx)
 			// Check error
 			if err != nil {
 				// Close the messages queue (subscription has closed)
-				close(cr.Messages)
-				cr.Logs <- uilog{logprefix: "suberr", logmsg: "subscription has closed"}
+				close(cr.Inbound)
+				cr.Logs <- chatlog{logprefix: "suberr", logmsg: "subscription has closed"}
 				return
 			}
 
 			// Check if message is from self
-			if message.ReceivedFrom == cr.SelfID {
+			if message.ReceivedFrom == cr.selfid {
 				continue
 			}
 
 			// Declare a ChatMessage
-			cm := &ChatMessage{}
+			cm := &chatmessage{}
 			// Unmarshal the message data into a ChatMessage
 			err = json.Unmarshal(message.Data, cm)
 			if err != nil {
-				cr.Logs <- uilog{logprefix: "suberr", logmsg: "could not unmarshal JSON"}
+				cr.Logs <- chatlog{logprefix: "suberr", logmsg: "could not unmarshal JSON"}
 				continue
 			}
 
 			// Send the ChatMessage into the message queue
-			cr.Messages <- cm
+			cr.Inbound <- *cm
 		}
 	}
 }
@@ -192,7 +203,7 @@ func (cr *ChatRoom) Exit() {
 	defer cr.pscancel()
 
 	// Cancel the existing subscription
-	cr.subscription.Cancel()
+	cr.psub.Cancel()
 	// Close the topic handler
 	cr.pstopic.Close()
 }
