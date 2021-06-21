@@ -12,6 +12,7 @@ import (
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p-core/routing"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	host "github.com/libp2p/go-libp2p-host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -60,14 +61,9 @@ func NewP2P() *P2P {
 	ctx := context.Background()
 
 	// Setup a P2P Host Node
-	nodehost := setupHost(ctx)
+	nodehost, kaddht := setupHost(ctx)
 	// Debug log
-	logrus.Debugln("Created the P2P Host.")
-
-	// Create and Setup a Kademlia DHT on the host
-	kaddht := setupKadDHT(ctx, nodehost)
-	// Debug log
-	logrus.Debugln("Created the Kademlia DHT on the P2P Host.")
+	logrus.Debugln("Created the P2P Host and the Kademlia DHT.")
 
 	// Bootstrap the Kad DHT
 	bootstrapDHT(ctx, nodehost, kaddht)
@@ -162,7 +158,7 @@ func (p2p *P2P) AnnounceConnect() {
 
 // A function that generates the p2p configuration options and creates a
 // libp2p host object for the given context. The created host is returned
-func setupHost(ctx context.Context) host.Host {
+func setupHost(ctx context.Context) (host.Host, *dht.IpfsDHT) {
 	// Set up the host identity options
 	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
 	identity := libp2p.Identity(prvkey)
@@ -203,15 +199,32 @@ func setupHost(ctx context.Context) host.Host {
 	// Trace log
 	logrus.Traceln("Generated P2P Address Listener Configuration.")
 
-	// Set up the stream mux, connection manager and NAT options
+	// Set up the stream multiplexer and connection manager options
 	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
 	conn := libp2p.ConnectionManager(connmgr.NewConnManager(100, 400, time.Minute))
-	nat := libp2p.NATPortMap()
 
 	// Trace log
-	logrus.Traceln("Generated P2P Stream Multiplexer, Connection Manager and NAT Configurations.")
+	logrus.Traceln("Generated P2P Stream Multiplexer, Connection Manager Configurations.")
 
-	opts := libp2p.ChainOptions(identity, listen, security, transport, muxer, nat, conn)
+	// Setup NAT traversal and relay options
+	nat := libp2p.NATPortMap()
+	relay := libp2p.EnableAutoRelay()
+
+	// Trace log
+	logrus.Traceln("Generated P2P NAT Traversal and Relay Configurations.")
+
+	// Declare a KadDHT
+	var kaddht *dht.IpfsDHT
+	// Setup a routing configuration with the KadDHT
+	routing := libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+		kaddht = setupKadDHT(ctx, h)
+		return kaddht, err
+	})
+
+	// Trace log
+	logrus.Traceln("Generated P2P Routing Configurations.")
+
+	opts := libp2p.ChainOptions(identity, listen, security, transport, muxer, conn, nat, routing, relay)
 
 	// Construct a new libP2P host with the created options
 	libhost, err := libp2p.New(ctx, opts)
@@ -222,8 +235,8 @@ func setupHost(ctx context.Context) host.Host {
 		}).Fatalln("Failed to Create the P2P Host!")
 	}
 
-	// Return the created host
-	return libhost
+	// Return the created host and the kademlia DHT
+	return libhost, kaddht
 }
 
 // A function that generates a Kademlia DHT object and returns it
