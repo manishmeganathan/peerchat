@@ -10,7 +10,7 @@ import (
 )
 
 // Represents the app version
-const appversion = "v1.0.0"
+const appversion = "v1.1.0"
 
 // A structure that represents the ChatRoom UI
 type UI struct {
