@@ -2,7 +2,7 @@
 ![Banner](banner.png)
 ### A terminal-based P2P chat application using libp2p and Golang that uses a Kademlia DHT and the IPFS network for peer discovery and routing
 
-**Version: 1.0.0**  
+**Version: 1.1.0**  
 **Platform: Windows, Mac OSX and Linux**  
 **Language: Go 1.16**
 **License: MIT**
