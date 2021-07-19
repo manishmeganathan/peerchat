@@ -4,7 +4,7 @@
 
 **Version: 1.1.0**  
 **Platform: Windows, Mac OSX and Linux**  
-**Language: Go 1.16**
+**Language: Go 1.16**   
 **License: MIT**
 
 ## Overview
